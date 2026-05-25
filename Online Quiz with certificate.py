@@ -163,45 +163,33 @@ def load_data():
 
     EXPECTED_COLS = 10  # Board, Class, Chapter, Question, Opt1-4, Correct Answer, Explanation
 
-    def clean_field(s):
-        """Strip the trailing/leading double-quote artifacts left by the
-        double-layer quoting in this CSV format."""
-        s = s.strip()
-        while s.endswith('""'):
-            s = s[:-2].rstrip()
-        while s.startswith('""'):
-            s = s[2:].lstrip()
-        return s
-
     try:
         header = None
         rows = []
 
         with open(file_path, 'r', encoding='latin1') as f:
-            for raw_line in f:
-                line = raw_line.strip().strip('\r')
-                if not line:
+            # Step 1: Use an outer reader to cleanly unescape the outer double-quote wrapper
+            outer_reader = csv_module.reader(f)
+            for outer_row in outer_reader:
+                if not outer_row or not outer_row[0].strip():
                     continue
 
-                # Each row is wrapped in an extra pair of outer double-quotes — remove them.
-                if line.startswith('"') and line.endswith('"'):
-                    line = line[1:-1]
+                # outer_row[0] now contains the clean, correctly quoted standard CSV line
+                actual_line = outer_row[0]
 
-                # Parse with csv.reader to handle quoted fields correctly.
-                parsed = next(csv_module.reader([line]))
-                parsed = [clean_field(field) for field in parsed]
+                # Step 2: Parse the actual line with csv.reader to split columns properly
+                parsed = next(csv_module.reader([actual_line]))
+                parsed = [field.strip() for field in parsed]
 
                 if header is None:
                     header = parsed[:EXPECTED_COLS]
                     continue
 
-                # The Explanation field often contains commas, causing extra columns.
-                # Fix: merge all overflow columns back into the last (Explanation) column.
+                # Fallback check to merge any unexpected overflow columns into the Explanation column
                 if len(parsed) > EXPECTED_COLS:
                     explanation_merged = ', '.join(parsed[EXPECTED_COLS - 1:])
                     parsed = parsed[:EXPECTED_COLS - 1] + [explanation_merged]
 
-                # Skip any rows that are still malformed after merging
                 if len(parsed) == EXPECTED_COLS:
                     rows.append(parsed)
 

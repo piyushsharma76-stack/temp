@@ -1,4 +1,4 @@
 "Board,Class,Chapter,Question,Option1,Option2,Option3,Option4,Correct Answer,Explanation of Correct Answer"
-"CBSE,10,Electricity,""A wire has resistance 4 ?. It is stretched to double its length without changing volume. New resistance is:"",""2 ?"",""4 ?"",""8 ?"",""16 ?"",""16 ?"",""R ? L² when volume constant ? R becomes 4× ? 16 ?"",""Resistivity relation under stretching."""
-"CBSE,10,Electricity,""If current in a resistor increases from 2 A to 4 A, power increases by factor:"",""2"",""4"",""6"",""8"",""4"",""P ? I² ? (4²)/(2²)=4"",""Power dependence on current."""
 "CBSE,10,Electricity,""A 60 W bulb runs for 5 hours. Energy consumed is:"",""300 Wh"",""60 Wh"",""120 Wh"",""600 Wh"",""300 Wh"",""E = Pt = 60×5 = 300 Wh"",""Electrical energy calculation."""
+"CBSE,10,The Human Eye and the Colourful World,""A person cannot see distant objects clearly. This defect is:"",""Hypermetropia"",""Myopia"",""Cataract"",""Presbyopia"",""Myopia"",""Near-sightedness defect"",""Vision defect identification."""
+"CBSE,10,Light - Reflection and Refraction,""If refractive index increases, speed of light:"",""Increases"",""Decreases"",""Remains same"",""Becomes infinite"",""Decreases"",""v = c/n"",""Wave propagation concept."""

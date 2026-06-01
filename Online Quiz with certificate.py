@@ -6,7 +6,7 @@ import io
 import re
 import csv as csv_module
 import base64
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 
 # --- 1. PAGE CONFIG & STYLING ---
 st.set_page_config(page_title="Sahayaks Academy Quiz", layout="wide")
@@ -81,7 +81,6 @@ st.markdown("""
         text-align: center;
         margin-bottom: 20px;
     }
-    /* Certificate open-button */
     .cert-btn-wrap a {
         display: block;
         background-color: #FFD700;
@@ -95,9 +94,7 @@ st.markdown("""
         text-decoration: none;
         margin-top: 12px;
     }
-    .cert-btn-wrap a:hover {
-        background-color: #e6c200;
-    }
+    .cert-btn-wrap a:hover { background-color: #e6c200; }
     </style>
     """, unsafe_allow_html=True)
 
@@ -107,6 +104,10 @@ if 'user_name'          not in st.session_state: st.session_state.user_name     
 if 'selected_chapter'   not in st.session_state: st.session_state.selected_chapter   = None
 if 'quiz_state'         not in st.session_state: st.session_state.quiz_state         = {'idx': 0, 'answers': {}, 'end_time': None}
 if 'just_answered_idx'  not in st.session_state: st.session_state.just_answered_idx  = None
+if 'cert_uri'           not in st.session_state: st.session_state.cert_uri           = None
+# ↑ Storing the certificate URI in session_state means it is generated exactly
+#   once (when results first load) and survives every subsequent Streamlit rerun,
+#   including the one triggered by st.balloons().
 
 
 # --- 3. MATH SYMBOL REPAIR ---
@@ -122,7 +123,7 @@ def repair_math_symbols(text):
     return text
 
 
-# --- 4. CSV LOADER (robust: handles commas inside every field) ---
+# --- 4. CSV LOADER ---
 @st.cache_data
 def load_data():
     script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -132,33 +133,17 @@ def load_data():
         st.warning(f"⚠️ Data file not found at: {file_path}")
         return pd.DataFrame()
 
-    EXPECTED = 10   # Board, Class, Chapter, Question, Opt1-4, Correct Answer, Explanation
+    EXPECTED = 10
 
     def parse_line(raw):
-        """
-        The CSV format wraps every row in a single outer pair of "…" quotes,
-        and each individual field is further wrapped in ""…"" double-quote pairs.
-
-        Steps:
-          1. Strip the single outer wrapping quote from the whole row.
-          2. Replace every "" (escaped-quote pair) with a single " so that
-             csv.reader now sees properly quoted fields — commas INSIDE a
-             question or explanation are protected and won't be mis-split.
-          3. If the explanation still got split (e.g. it contained a literal
-             quote), merge columns 10 onwards back into col 9.
-        """
         line = raw.strip().strip('\r')
         if not line:
             return None
-        # Step 1 – remove single outer wrapper
         if line.startswith('"') and line.endswith('"'):
             line = line[1:-1]
-        # Step 2 – convert ""field"" → "field"
         line = line.replace('""', '"')
-        # Step 3 – parse as standard CSV
         parsed = next(csv_module.reader([line], quotechar='"'))
         parsed = [f.strip() for f in parsed]
-        # Step 4 – merge any explanation overflow back into col 9
         if len(parsed) > EXPECTED:
             parsed = parsed[:9] + [', '.join(parsed[9:])]
         return parsed if len(parsed) == EXPECTED else None
@@ -193,15 +178,14 @@ def load_data():
 
     if 'Question' in df.columns:
         return df.dropna(subset=['Question'])
-    else:
-        st.error(f"❌ 'Question' column not found. Headers: {list(df.columns)}")
-        return pd.DataFrame()
+    st.error(f"❌ 'Question' column not found. Headers: {list(df.columns)}")
+    return pd.DataFrame()
 
 
 df_all = load_data()
 
 
-# --- 5. LIVE TIMER (fragment so it doesn't rerun the whole page) ---
+# --- 5. LIVE TIMER ---
 @st.fragment(run_every=1.0)
 def isolated_timer_component():
     if st.session_state.step == "quiz" and st.session_state.quiz_state.get('end_time'):
@@ -215,14 +199,15 @@ def isolated_timer_component():
             st.rerun()
 
 
-# --- 6. CERTIFICATE — HTML rendered in browser (works on ALL mobile devices) ---
+# --- 6. IST TIMESTAMP ---
+def get_ist_timestamp():
+    """Returns current time formatted in Indian Standard Time (UTC+5:30)."""
+    IST = timezone(timedelta(hours=5, minutes=30))
+    return datetime.now(IST).strftime("%d %B %Y, %I:%M %p IST")
+
+
+# --- 7. CERTIFICATE (HTML → base64 data-URI, opens in new tab on all devices) ---
 def generate_certificate_html(user_name, chapter, score_pct, date_str):
-    """
-    Returns a base64-encoded data-URI of a self-contained HTML certificate.
-    Opening this URI in a new tab works on every mobile browser without any
-    file-download permission — the student can then use the browser's built-in
-    Share / Print / Save-as-PDF to keep it.
-    """
     html = f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -277,51 +262,24 @@ def generate_certificate_html(user_name, chapter, score_pct, date_str):
     margin: 20px auto;
     width: 80%;
   }}
-  .certify-text {{
-    color: #CCCCCC;
-    font-size: 1rem;
-    margin: 24px 0 10px;
-  }}
-  .student-name {{
+  .certify-text  {{ color: #CCCCCC; font-size: 1rem; margin: 24px 0 10px; }}
+  .student-name  {{
     font-family: 'Cinzel', serif;
-    font-size: 2.6rem;
-    color: #FFD700;
-    margin: 10px 0 16px;
-    word-break: break-word;
+    font-size: 2.6rem; color: #FFD700;
+    margin: 10px 0 16px; word-break: break-word;
   }}
-  .completed-text {{
-    color: #CCCCCC;
-    font-size: 1rem;
-    margin-bottom: 10px;
-  }}
-  .chapter-name {{
-    font-size: 1.5rem;
-    font-weight: 600;
-    color: #FFFFFF;
-    margin: 8px 0 20px;
-    word-break: break-word;
+  .completed-text {{ color: #CCCCCC; font-size: 1rem; margin-bottom: 10px; }}
+  .chapter-name  {{
+    font-size: 1.5rem; font-weight: 600; color: #FFFFFF;
+    margin: 8px 0 20px; word-break: break-word;
   }}
   .score-badge {{
-    display: inline-block;
-    background: #FFD700;
-    color: #0F1937;
-    font-size: 1.6rem;
-    font-weight: 700;
-    padding: 10px 36px;
-    border-radius: 50px;
-    margin: 10px 0 28px;
+    display: inline-block; background: #FFD700; color: #0F1937;
+    font-size: 1.6rem; font-weight: 700;
+    padding: 10px 36px; border-radius: 50px; margin: 10px 0 28px;
   }}
-  .date-text {{
-    color: #AAAAAA;
-    font-size: 0.9rem;
-    margin-top: 24px;
-  }}
-  .footer {{
-    color: #555E7A;
-    font-size: 0.8rem;
-    font-style: italic;
-    margin-top: 12px;
-  }}
+  .date-text {{ color: #AAAAAA; font-size: 0.9rem; margin-top: 24px; }}
+  .footer    {{ color: #555E7A; font-size: 0.8rem; font-style: italic; margin-top: 12px; }}
   @media print {{
     body {{ background: white; padding: 0; }}
     .cert {{ border-color: #FFD700; box-shadow: none; max-width: 100%; }}
@@ -331,7 +289,7 @@ def generate_certificate_html(user_name, chapter, score_pct, date_str):
     .logo {{ font-size: 1.6rem; }}
     .student-name {{ font-size: 1.8rem; }}
     .chapter-name {{ font-size: 1.1rem; }}
-    .score-badge {{ font-size: 1.2rem; padding: 8px 24px; }}
+    .score-badge  {{ font-size: 1.2rem; padding: 8px 24px; }}
   }}
 </style>
 </head>
@@ -351,18 +309,18 @@ def generate_certificate_html(user_name, chapter, score_pct, date_str):
   </div>
 </body>
 </html>"""
-    # Encode as base64 data-URI so it opens as a standalone page in any browser
     b64 = base64.b64encode(html.encode('utf-8')).decode('utf-8')
     return f"data:text/html;base64,{b64}"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# --- 7. PAGES ---
+# PAGES
 # ─────────────────────────────────────────────────────────────────────────────
 
-# ── LOGIN ─────────────────────────────────────────────────────────────────────
+# LOGIN
 if st.session_state.step == "login":
-    st.markdown("<h1 style='text-align:center;color:#FFD700;'>Sahayaks Education</h1>", unsafe_allow_html=True)
+    st.markdown("<h1 style='text-align:center;color:#FFD700;'>Sahayaks Education</h1>",
+                unsafe_allow_html=True)
     col1, col2, col3 = st.columns([1, 1.5, 1])
     with col2:
         st.markdown("<p style='color:#FFFFFF;font-weight:bold;font-size:1.1rem;'>Student Entrance</p>",
@@ -380,36 +338,35 @@ if st.session_state.step == "login":
                 st.error("Please enter your name to proceed.")
 
 
-# ── INSTRUCTIONS ──────────────────────────────────────────────────────────────
+# INSTRUCTIONS
 elif st.session_state.step == "instructions":
-    st.markdown("<h2 style='text-align:center;color:#FFD700;'>Instructions</h2>", unsafe_allow_html=True)
+    st.markdown("<h2 style='text-align:center;color:#FFD700;'>Instructions</h2>",
+                unsafe_allow_html=True)
     col1, col2, col3 = st.columns([0.1, 0.8, 0.1])
     with col2:
         st.markdown(f"""
         <div style="background-color:#1b2641;padding:25px;border-radius:15px;border:1px solid #FFD700;">
             <p style="color:#FFFFFF;">Welcome, <b>{st.session_state.user_name}</b>.</p>
-            <ul style="color:#FFFFFF;line-height:2rem;">
+            <ul style="color:#FFFFFF;line-height:2.2rem;">
                 <li><b>Timer:</b> 1 minute per question (pooled). A 10-question chapter gives 10 minutes total.</li>
                 <li><b>Feedback:</b> After each answer you will see if you were right or wrong, the correct answer, and a brief explanation.</li>
                 <li><b>Navigation:</b> Use the sidebar to jump between questions.</li>
-                <li><b>Results:</b> Only your final score is shown at the end — no full answer breakdown.</li>
-                <li><b>Certificate:</b> Awarded automatically if you score above 90%. Opens in your browser — use Share / Print to save it.</li>
+                <li><b>Results:</b> Only your final score is shown at the end.</li>
+                <li><b>Certificate:</b> Awarded automatically if you score above 90%. Opens in a new tab — use your browser's Print / Share to save as PDF.</li>
             </ul>
-        </div>
-        """, unsafe_allow_html=True)
+        </div>""", unsafe_allow_html=True)
         st.write("")
         c1, c2 = st.columns(2)
         if c1.button("✅ I Agree"):
-            st.session_state.step = "chapter_select"
-            st.rerun()
+            st.session_state.step = "chapter_select"; st.rerun()
         if c2.button("❌ Quit"):
-            st.session_state.step = "login"
-            st.rerun()
+            st.session_state.step = "login"; st.rerun()
 
 
-# ── CHAPTER SELECT ────────────────────────────────────────────────────────────
+# CHAPTER SELECT
 elif st.session_state.step == "chapter_select":
-    st.markdown("<h2 style='text-align:center;color:#FFD700;'>Select a Chapter</h2>", unsafe_allow_html=True)
+    st.markdown("<h2 style='text-align:center;color:#FFD700;'>Select a Chapter</h2>",
+                unsafe_allow_html=True)
     if df_all.empty:
         st.error("No data loaded. Please verify your CSV file path and structure.")
     else:
@@ -419,16 +376,17 @@ elif st.session_state.step == "chapter_select":
             if cols[i % 3].button(f"📘 {ch}", key=f"ch_{i}"):
                 chapter_qs = df_all[df_all['Chapter'] == ch]
                 st.session_state.selected_chapter = ch
+                st.session_state.cert_uri = None   # reset certificate for new attempt
                 st.session_state.quiz_state = {
                     'idx': 0,
                     'answers': {},
-                    'end_time': time.time() + (len(chapter_qs) * 60)   # 1 min / question
+                    'end_time': time.time() + (len(chapter_qs) * 60)
                 }
                 st.session_state.step = "quiz"
                 st.rerun()
 
 
-# ── QUIZ ──────────────────────────────────────────────────────────────────────
+# QUIZ
 elif st.session_state.step == "quiz":
     chapter_qs = df_all[df_all['Chapter'] == st.session_state.selected_chapter].to_dict('records')
     qs  = st.session_state.quiz_state
@@ -442,10 +400,8 @@ elif st.session_state.step == "quiz":
     remaining = int(qs['end_time'] - time.time())
 
     if remaining <= 0 and len(qs['answers']) < len(chapter_qs):
-        st.session_state.step = "results"
-        st.rerun()
+        st.session_state.step = "results"; st.rerun()
 
-    # Sidebar
     with st.sidebar:
         st.markdown("<b style='color:#FFD700;'>⏳ Time Remaining</b>", unsafe_allow_html=True)
         isolated_timer_component()
@@ -456,14 +412,11 @@ elif st.session_state.step == "quiz":
             lbl = "✅" if i in qs['answers'] else ("▶" if i == idx else str(i + 1))
             if nav_cols[i % 4].button(lbl, key=f"nav_{i}"):
                 st.session_state.just_answered_idx = None
-                qs['idx'] = i
-                st.rerun()
+                qs['idx'] = i; st.rerun()
         st.markdown("---")
         if st.button("🚪 Quit Test", key="quit_sidebar"):
-            st.session_state.step = "confirm_quit"
-            st.rerun()
+            st.session_state.step = "confirm_quit"; st.rerun()
 
-    # Question
     t1, t2 = st.columns([3, 1])
     t1.subheader(f"Question {idx + 1} of {len(chapter_qs)}")
     with t2:
@@ -492,7 +445,6 @@ elif st.session_state.step == "quiz":
             st.success(f"✅ Correct! The answer is: **{q_data['Correct Answer']}**")
         else:
             st.error(f"❌ Incorrect. You chose: **{ans['chosen']}** | Correct answer: **{q_data['Correct Answer']}**")
-
         explanation = q_data.get('Explanation of Correct Answer', '')
         if explanation and str(explanation).strip():
             st.markdown(f"""
@@ -500,18 +452,15 @@ elif st.session_state.step == "quiz":
                     <b style="color:#FFD700;">💡 Explanation:</b><br><br>
                     <span style="color:#FFFFFF;">{explanation}</span>
                 </div>""", unsafe_allow_html=True)
-
         st.write("")
         if idx + 1 < len(chapter_qs):
             if st.button("Next Question ➡️"):
                 st.session_state.just_answered_idx = None
-                qs['idx'] += 1
-                st.rerun()
+                qs['idx'] += 1; st.rerun()
         else:
             if st.button("🏁 Submit Final Answers"):
                 st.session_state.just_answered_idx = None
-                st.session_state.step = "results"
-                st.rerun()
+                st.session_state.step = "results"; st.rerun()
 
     else:
         ans  = qs['answers'][idx]
@@ -521,25 +470,25 @@ elif st.session_state.step == "quiz":
         if idx + 1 < len(chapter_qs):
             if st.button("Next Question ➡️"):
                 st.session_state.just_answered_idx = None
-                qs['idx'] += 1
-                st.rerun()
+                qs['idx'] += 1; st.rerun()
         else:
             if st.button("🏁 Submit Final Answers"):
                 st.session_state.just_answered_idx = None
-                st.session_state.step = "results"
-                st.rerun()
+                st.session_state.step = "results"; st.rerun()
 
 
-# ── CONFIRM QUIT ──────────────────────────────────────────────────────────────
+# CONFIRM QUIT
 elif st.session_state.step == "confirm_quit":
-    st.markdown("<h2 style='text-align:center;color:#FFD700;'>⚠️ Quit Test?</h2>", unsafe_allow_html=True)
+    st.markdown("<h2 style='text-align:center;color:#FFD700;'>⚠️ Quit Test?</h2>",
+                unsafe_allow_html=True)
     col1, col2, col3 = st.columns([1, 1.5, 1])
     with col2:
         qs       = st.session_state.quiz_state
         answered = len(qs['answers'])
         total    = len(df_all[df_all['Chapter'] == st.session_state.selected_chapter])
         st.markdown(f"""
-        <div style="background-color:#1b2641;padding:25px;border-radius:15px;border:1px solid #FFD700;text-align:center;">
+        <div style="background-color:#1b2641;padding:25px;border-radius:15px;
+                    border:1px solid #FFD700;text-align:center;">
             <p style="color:#FFFFFF;font-size:1.1rem;">
                 You have answered <b style="color:#FFD700;">{answered} of {total}</b> questions.<br><br>
                 Are you sure you want to quit? Your progress will be lost.
@@ -553,7 +502,7 @@ elif st.session_state.step == "confirm_quit":
             st.session_state.step = "quiz"; st.rerun()
 
 
-# ── RESULTS ───────────────────────────────────────────────────────────────────
+# RESULTS
 elif st.session_state.step == "results":
     qs         = st.session_state.quiz_state
     chapter_qs = df_all[df_all['Chapter'] == st.session_state.selected_chapter].to_dict('records')
@@ -563,6 +512,18 @@ elif st.session_state.step == "results":
     score_pct     = (correct_count / total * 100) if total > 0 else 0
     passed        = score_pct > 90
 
+    # ── Generate certificate FIRST, before st.balloons(), and cache it in
+    #    session_state so it survives the rerun that balloons() triggers.
+    if passed and st.session_state.cert_uri is None:
+        date_str = get_ist_timestamp()          # ← correct IST time
+        st.session_state.cert_uri = generate_certificate_html(
+            st.session_state.user_name,
+            st.session_state.selected_chapter,
+            score_pct,
+            date_str
+        )
+
+    # ── Now trigger balloons (causes a rerun, but cert_uri is already saved) ──
     if passed:
         st.balloons()
 
@@ -586,40 +547,33 @@ elif st.session_state.step == "results":
     if passed:
         st.markdown("<h3 style='text-align:center;color:#FFD700;'>🎓 You qualify for a certificate!</h3>",
                     unsafe_allow_html=True)
-        date_str  = datetime.now().strftime("%d %B %Y, %I:%M %p")
-        cert_uri  = generate_certificate_html(
-                        st.session_state.user_name,
-                        st.session_state.selected_chapter,
-                        score_pct, date_str)
-
-        # ── Mobile-safe certificate button ──────────────────────────────────
-        # Opens the certificate as a full HTML page in a new browser tab.
-        # Works on iPhone, Android, and desktop — no file download needed.
-        # Students can then use browser Share → Save as PDF / Screenshot to keep it.
         _, mid, _ = st.columns([1, 2, 1])
         with mid:
+            # cert_uri is guaranteed to exist here (generated above before balloons)
             st.markdown(f"""
                 <div class="cert-btn-wrap">
-                    <a href="{cert_uri}" target="_blank">
+                    <a href="{st.session_state.cert_uri}" target="_blank">
                         🎓 Open My Certificate
                     </a>
                 </div>
                 <p style="color:#AAAAAA;font-size:0.85rem;text-align:center;margin-top:8px;">
-                    Opens in a new tab — use your browser's Share or Print option to save it as a PDF.
+                    Opens in a new tab — use your browser's
+                    <b>Print → Save as PDF</b> (desktop / Android) or
+                    <b>Share → Save to Files</b> (iPhone) to keep a copy.
                 </p>""", unsafe_allow_html=True)
     else:
         needed = 90 - score_pct
-        st.markdown(f"<p style='text-align:center;color:#CCCCCC;'>Score above 90% to earn a certificate. "
-                    f"You need <b style='color:#FFD700;'>{needed:.1f}% more</b> to qualify.</p>",
-                    unsafe_allow_html=True)
+        st.markdown(
+            f"<p style='text-align:center;color:#CCCCCC;'>Score above 90% to earn a certificate. "
+            f"You need <b style='color:#FFD700;'>{needed:.1f}% more</b> to qualify.</p>",
+            unsafe_allow_html=True)
 
     st.write("")
     col1, col2 = st.columns(2)
     if col1.button("🔄 Try Another Chapter"):
         st.session_state.selected_chapter = None
+        st.session_state.cert_uri         = None
         st.session_state.quiz_state       = {'idx': 0, 'answers': {}, 'end_time': None}
-        st.session_state.step             = "chapter_select"
-        st.rerun()
+        st.session_state.step             = "chapter_select"; st.rerun()
     if col2.button("🏠 Start Over"):
-        st.session_state.clear()
-        st.rerun()
+        st.session_state.clear(); st.rerun()
